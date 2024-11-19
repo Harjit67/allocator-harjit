@@ -18,6 +18,25 @@ struct Block {
     next: *mut Block,         // Pointeur vers le prochain bloc
 }
 
+impl Block {
+    /// Calcule et retourne l'adresse de début du bloc.
+    /// 
+    /// Cette méthode transforme l'adresse du bloc (c'est-à-dire le pointeur vers la structure `Block`)
+    /// en un entier de type `usize`, qui correspond à l'adresse mémoire brute de ce bloc.
+    fn starting_addr(&self) -> usize {
+        self as *const Self as usize // Cast du pointeur vers un entier
+    }
+
+    /// Calcule et retourne l'adresse de fin du bloc.
+    ///
+    /// L'adresse de fin est obtenue en ajoutant la taille (`size`) du bloc à son adresse de début.
+    /// Cela permet de connaître précisément la région mémoire couverte par le bloc.
+    fn finishing_addr(&self) -> usize {
+        self.starting_addr() + self.size // Additionne l'adresse de début à la taille pour obtenir la fin
+    }
+}
+
+
 // Allocateur FreeList
 pub struct FreeListAllocator {
     free_list: UnsafeCell<*mut Block>, // Liste des blocs libres (pointeur brut)
