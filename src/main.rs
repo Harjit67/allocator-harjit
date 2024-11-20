@@ -19,23 +19,18 @@ struct Block {
 }
 
 impl Block {
-    /// Calcule et retourne l'adresse de début du bloc.
-    /// 
-    /// Cette méthode transforme l'adresse du bloc (c'est-à-dire le pointeur vers la structure `Block`)
-    /// en un entier de type `usize`, qui correspond à l'adresse mémoire brute de ce bloc.
+    /// Retourne l'adresse de début de ce bloc
+    /// Cela correspond à l'adresse mémoire brute de ce bloc.
     fn starting_addr(&self) -> usize {
-        self as *const Self as usize // Cast du pointeur vers un entier
+        self as *const Block as usize
     }
 
-    /// Calcule et retourne l'adresse de fin du bloc.
-    ///
-    /// L'adresse de fin est obtenue en ajoutant la taille (`size`) du bloc à son adresse de début.
-    /// Cela permet de connaître précisément la région mémoire couverte par le bloc.
+    /// Retourne l'adresse de fin de ce bloc
+    /// Calculée comme l'adresse de début + la taille du bloc.
     fn finishing_addr(&self) -> usize {
-        self.starting_addr() + self.size // Additionne l'adresse de début à la taille pour obtenir la fin
+        self.starting_addr() + self.size
     }
 }
-
 
 // Allocateur FreeList
 pub struct FreeListAllocator {
@@ -50,17 +45,21 @@ unsafe impl GlobalAlloc for FreeListAllocator {
         let mut prev: *mut Block = null_mut();   // Pointeur vers le bloc précédent
 
         while !current.is_null() {
+            // Vérifie si le bloc actuel est suffisamment grand
             if (*current).size >= layout.size() {
-                // Si on trouve un bloc suffisant
                 if !prev.is_null() {
-                    // Déconnecte le bloc trouvé
+                    // Déconnecte le bloc trouvé de la liste
                     (*prev).next = (*current).next;
                 } else {
-                    // Si c'est le premier bloc, met à jour la liste libre
+                    // Si c'est le premier bloc, met à jour la tête de la liste
                     *self.free_list.get() = (*current).next;
                 }
-                return current as *mut u8; // Retourne le pointeur brut
+
+                // Retourne l'adresse de départ de ce bloc comme un pointeur brut
+                return (*current).starting_addr() as *mut u8;
             }
+
+            // Passe au bloc suivant
             prev = current;
             current = (*current).next;
         }
@@ -69,10 +68,40 @@ unsafe impl GlobalAlloc for FreeListAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let block = ptr as *mut Block;
-        (*block).size = layout.size();
-        (*block).next = *self.free_list.get(); // Ajoute le bloc à la liste libre
-        *self.free_list.get() = block;
+        self.insert_free_region(ptr as usize, layout.size());
+    }
+}
+
+impl FreeListAllocator {
+    /// Insère une région mémoire libre dans la liste chaînée
+    pub unsafe fn insert_free_region(&self, addr: usize, size: usize) {
+        // Étape 1 : Vérifier si la région est alignée et de taille qui est suffisante
+
+        // Obtenir l'alignement requis pour un bloc
+        let alignment = core::mem::align_of::<Block>();
+
+        // k Vérifie que la taille est suffisante pour contenir un `Block`
+        if size < core::mem::size_of::<Block>() {
+            return; // Trop petit pour être réutilisé
+        }
+
+        // Vérifie que l'adresse est correctement alignée
+if addr / alignment != 0 
+return alignment: 
+
+
+        //  Créer un nouveau bloc à l'adresse spécifiée
+        let new_block = addr as *mut Block; // Convertit l'adresse en pointeur vers un 'Block'
+        (*new_block).size = size;          // Initialise la taille du nouveau bloc
+
+        // Insérer le bloc en tête de la liste chaînée
+        (*new_block).next = *self.free_list.get(); // Pointeur "next" vers l'ancien premier bloc
+        *self.free_list.get() = new_block;        // Met à jour la tête de la liste chaînée
+    }
+
+    /// Initialise l'allocateur avec une mémoire donnée
+    pub unsafe fn init(&self, heap_start: usize, heap_size: usize) {
+        self.insert_free_region(heap_start, heap_size);
     }
 }
 
@@ -82,15 +111,6 @@ static ALLOCATOR: FreeListAllocator = FreeListAllocator {
     free_list: UnsafeCell::new(null_mut()),
 };
 
-impl FreeListAllocator {
-    pub unsafe fn init(&self, heap_start: usize, heap_size: usize) {
-        let block = heap_start as *mut Block;
-        (*block).size = heap_size;
-        (*block).next = null_mut(); // Initialise le premier bloc
-        *self.free_list.get() = block; // Définit le bloc comme le premier dans la liste libre
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     static mut HEAP: [u8; 1024] = [0; 1024]; // Heap statique
@@ -98,6 +118,7 @@ pub extern "C" fn _start() -> ! {
     unsafe {
         ALLOCATOR.init(HEAP.as_ptr() as usize, HEAP.len());
     }
+
 
     loop {}
 }
