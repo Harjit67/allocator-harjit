@@ -20,13 +20,11 @@ struct Block {
 
 impl Block {
     /// Retourne l'adresse de début de ce bloc
-    /// Cela correspond à l'adresse mémoire brute de ce bloc.
     fn starting_addr(&self) -> usize {
         self as *const Block as usize
     }
 
     /// Retourne l'adresse de fin de ce bloc
-    /// Calculée comme l'adresse de début + la taille du bloc.
     fn finishing_addr(&self) -> usize {
         self.starting_addr() + self.size
     }
@@ -42,29 +40,24 @@ unsafe impl Sync for FreeListAllocator {}
 unsafe impl GlobalAlloc for FreeListAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let mut current = *self.free_list.get(); // Récupère la liste des blocs libres
-        let mut prev: *mut Block = null_mut();   // Pointeur vers le bloc précédent
+        let mut previous_block: *mut Block = null_mut(); // Pointeur vers le bloc précédent
 
         while !current.is_null() {
-            // Vérifie si le bloc actuel est suffisamment grand
             if (*current).size >= layout.size() {
-                if !prev.is_null() {
-                    // Déconnecte le bloc trouvé de la liste
-                    (*prev).next = (*current).next;
+                if !previous_block.is_null() {
+                    (*previous_block).next = (*current).next;
                 } else {
-                    // Si c'est le premier bloc, met à jour la tête de la liste
                     *self.free_list.get() = (*current).next;
                 }
 
-                // Retourne l'adresse de départ de ce bloc comme un pointeur brut
                 return (*current).starting_addr() as *mut u8;
             }
 
-            // Passe au bloc suivant
-            prev = current;
+            previous_block = current;
             current = (*current).next;
         }
 
-        null_mut() // Aucun bloc trouvé
+        null_mut()
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
@@ -73,33 +66,57 @@ unsafe impl GlobalAlloc for FreeListAllocator {
 }
 
 impl FreeListAllocator {
-    /// Insère une région mémoire libre dans la liste chaînée
-    pub unsafe fn insert_free_region(&self, addr: usize, size: usize) {
-        // Étape 1 : Vérifier si la région est alignée et de taille qui est suffisante
+    /// Cherche un bloc libre correspondant à une taille et un alignement donnés
+    pub unsafe fn find_block(&mut self, size: usize, alignment: usize) -> Option<(*mut Block, usize)> {
+        let mut current_block = *self.free_list.get();
+        let mut previous_block: *mut Block = null_mut();
 
-        // Obtenir l'alignement requis pour un bloc
-        let alignment = core::mem::align_of::<Block>();
+        while !current_block.is_null() {
+            if let Ok(allocation_address) = Self::check_block_allocation(current_block, size, alignment) {
+                if !previous_block.is_null() {
+                    (*previous_block).next = (*current_block).next;
+                } else {
+                    *self.free_list.get() = (*current_block).next;
+                }
 
-        // k Vérifie que la taille est suffisante pour contenir un `Block`
-        if size < core::mem::size_of::<Block>() {
-            return; // Trop petit pour être réutilisé
+                return Some((current_block, allocation_address));
+            }
+
+            previous_block = current_block;
+            current_block = (*current_block).next;
         }
 
-        // Vérifie que l'adresse est correctement alignée
-if addr / alignment != 0 
-return alignment: 
-
-
-        //  Créer un nouveau bloc à l'adresse spécifiée
-        let new_block = addr as *mut Block; // Convertit l'adresse en pointeur vers un 'Block'
-        (*new_block).size = size;          // Initialise la taille du nouveau bloc
-
-        // Insérer le bloc en tête de la liste chaînée
-        (*new_block).next = *self.free_list.get(); // Pointeur "next" vers l'ancien premier bloc
-        *self.free_list.get() = new_block;        // Met à jour la tête de la liste chaînée
+        None
     }
 
-    /// Initialise l'allocateur avec une mémoire donnée
+    /// Vérifie si un bloc peut être utilisé pour une allocation
+    pub unsafe fn check_block_allocation(block: *mut Block, size: usize, alignment: usize) -> Result<usize, ()> {
+        let start_address = (*block).starting_addr();
+        let aligned_address = (start_address + alignment - 1) & !(alignment - 1);
+
+        if aligned_address + size <= (*block).finishing_addr() {
+            Ok(aligned_address)
+        } else {
+            Err(())
+        }
+    }
+
+    /// Insère une région mémoire libre dans la liste chaînée
+    pub unsafe fn insert_free_region(&self, addr: usize, size: usize) {
+        let alignment = core::mem::align_of::<Block>();
+
+        if size < core::mem::size_of::<Block>() || addr % alignment != 0 {
+            return;
+        }
+
+        let new_block = addr as *mut Block;
+        (*new_block).size = size;
+
+        (*new_block).next = *self.free_list.get();
+        *self.free_list.get() = new_block;
+    }
+
+    /// Initialise l'allocateur
     pub unsafe fn init(&self, heap_start: usize, heap_size: usize) {
         self.insert_free_region(heap_start, heap_size);
     }
@@ -113,12 +130,11 @@ static ALLOCATOR: FreeListAllocator = FreeListAllocator {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    static mut HEAP: [u8; 1024] = [0; 1024]; // Heap statique
+    static mut HEAP: [u8; 1024] = [0; 1024];
 
     unsafe {
         ALLOCATOR.init(HEAP.as_ptr() as usize, HEAP.len());
     }
-
 
     loop {}
 }
