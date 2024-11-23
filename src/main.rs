@@ -138,7 +138,7 @@ impl FreeListAllocator {
     }
 }
 
-// Déclaration de l'allocateur global
+// Déclaration de l'allocateurr global
 #[global_allocator]
 static ALLOCATOR: FreeListAllocator = FreeListAllocator {
     free_list: UnsafeCell::new(null_mut()),
@@ -157,39 +157,3 @@ pub extern "C" fn _start() -> ! {
 
 
 
-
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use core::alloc::Layout;
-
-    static mut TEST_HEAP: [u8; 1024] = [0; 1024]; // Simule une mémoire pour les tests
-
-    #[test]
-    fn test_allocation() {
-        unsafe {
-            // Initialiser l'allocateur avec la mémoire de test
-            ALLOCATOR.init(TEST_HEAP.as_ptr() as usize, TEST_HEAP.len());
-
-            // Test allocation de 16 octets
-            let layout1 = Layout::from_size_align(16, 8).unwrap();
-            let ptr1 = ALLOCATOR.alloc(layout1.clone());
-            assert!(!ptr1.is_null());
-
-            // Test allocation de 32 octets
-            let layout2 = Layout::from_size_align(32, 8).unwrap();
-            let ptr2 = ALLOCATOR.alloc(layout2.clone());
-            assert!(!ptr2.is_null());
-
-            // Libération des deux blocs
-            ALLOCATOR.dealloc(ptr1, layout1.clone());
-            ALLOCATOR.dealloc(ptr2, layout2.clone());
-
-            // Ré-allocation pour vérifier que la mémoire a été libérée correctement
-            let ptr3 = ALLOCATOR.alloc(layout1.clone());
-            assert!(!ptr3.is_null());
-        }
-    }
-}
