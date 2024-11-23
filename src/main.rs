@@ -1,21 +1,25 @@
-#![no_std]
+//#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![no_main]
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::ptr::null_mut;
+use core::ptr::{null_mut};
 use core::panic::PanicInfo;
 use core::cell::UnsafeCell;
+use core::mem;
 
+#[cfg(not(test))] // Cette fonction ne sera pas utilisée en mode test
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+
 // Bloc de mémoire libre
 #[repr(C)]
-pub struct Block {
-    pub size: usize,              // Taille du bloc
-    pub next: *mut Block,         // Pointeur vers le prochain bloc
+struct Block {
+    size: usize,              // Taille du bloc
+    next: *mut Block,         // Pointeur vers le prochain bloc
 }
 
 impl Block {
@@ -39,36 +43,43 @@ unsafe impl Sync for FreeListAllocator {}
 
 unsafe impl GlobalAlloc for FreeListAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let (size, align) = (layout.size(), layout.align());
-        let allocator = self.lock();
+        let (adjusted_size, alignment) = Self::adjust_layout(layout); // Ajustement du layout
+        let mut current = *self.free_list.get(); // Récupère la liste des blocs libres
+        let mut previous_block: *mut Block = null_mut(); // Pointeur vers le bloc précédent
 
-        if let Some((region, alloc_start)) = allocator.find_block(size, align) {
-            let alloc_end = alloc_start.checked_add(size).expect("Overflow");
-            let excess_size = (*region).finishing_addr() - alloc_end;
+        while !current.is_null() {
+            if (*current).size >= adjusted_size {
+                if !previous_block.is_null() {
+                    (*previous_block).next = (*current).next;
+                } else {
+                    *self.free_list.get() = (*current).next;
+                }
 
-            if excess_size > 0 {
-                allocator.insert_free_region(alloc_end, excess_size);
+                return (*current).starting_addr() as *mut u8;
             }
 
-            alloc_start as *mut u8
-        } else {
-            null_mut()
+            previous_block = current;
+            current = (*current).next;
         }
+
+        null_mut()
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let size = layout.size();
-        let allocator = self.lock();
-        allocator.insert_free_region(ptr as usize, size);
-        allocator.merge_free_blocks();
+        let (adjusted_size, _) = Self::adjust_layout(layout); // Ajustement du layout
+        self.insert_free_region(ptr as usize, adjusted_size);
     }
 }
 
 impl FreeListAllocator {
-    /// Retourne une référence mutable à l'allocateur en utilisant `UnsafeCell`
-    pub unsafe fn lock(&self) -> &mut FreeListAllocator {
-        // Utilisation correcte de `UnsafeCell` pour accéder à la mutabilité interne
-        &mut *(self as *const _ as *mut FreeListAllocator)
+    /// Ajuste la taille et l'alignement pour répondre aux contraintes minimales
+    fn adjust_layout(layout: Layout) -> (usize, usize) {
+        let layout = layout
+            .align_to(mem::align_of::<Block>())
+            .expect("adjusting alignment failed")
+            .pad_to_align();
+        let size = layout.size().max(mem::size_of::<Block>());
+        (size, layout.align())
     }
 
     /// Cherche un bloc libre correspondant à une taille et un alignement donnés
@@ -108,9 +119,9 @@ impl FreeListAllocator {
 
     /// Insère une région mémoire libre dans la liste chaînée
     pub unsafe fn insert_free_region(&self, addr: usize, size: usize) {
-        let alignment = core::mem::align_of::<Block>();
+        let alignment = mem::align_of::<Block>();
 
-        if size < core::mem::size_of::<Block>() || addr % alignment != 0 {
+        if size < mem::size_of::<Block>() || addr % alignment != 0 {
             return;
         }
 
@@ -119,26 +130,6 @@ impl FreeListAllocator {
 
         (*new_block).next = *self.free_list.get();
         *self.free_list.get() = new_block;
-    }
-
-    /// Fusion des  sb blocs libres adjacents
-    pub unsafe fn merge_free_blocks(&mut self) {
-        let mut current_block = *self.free_list.get();
-
-        while !current_block.is_null() {
-            let next_block = (*current_block).next;
-
-            if (*current_block).finishing_addr() && !next_block.is_null() == next_block as usize {
-                
-                (*current_block).size += (*next_block).size;
-                
-                (*current_block).next = (*next_block).next;
-            } else {
-                
-                
-                current_block = next_block;
-            }
-        }
     }
 
     /// Initialise l'allocateur
@@ -162,4 +153,43 @@ pub extern "C" fn _start() -> ! {
     }
 
     loop {}
+}
+
+
+
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::alloc::Layout;
+
+    static mut TEST_HEAP: [u8; 1024] = [0; 1024]; // Simule une mémoire pour les tests
+
+    #[test]
+    fn test_allocation() {
+        unsafe {
+            // Initialiser l'allocateur avec la mémoire de test
+            ALLOCATOR.init(TEST_HEAP.as_ptr() as usize, TEST_HEAP.len());
+
+            // Test allocation de 16 octets
+            let layout1 = Layout::from_size_align(16, 8).unwrap();
+            let ptr1 = ALLOCATOR.alloc(layout1.clone());
+            assert!(!ptr1.is_null());
+
+            // Test allocation de 32 octets
+            let layout2 = Layout::from_size_align(32, 8).unwrap();
+            let ptr2 = ALLOCATOR.alloc(layout2.clone());
+            assert!(!ptr2.is_null());
+
+            // Libération des deux blocs
+            ALLOCATOR.dealloc(ptr1, layout1.clone());
+            ALLOCATOR.dealloc(ptr2, layout2.clone());
+
+            // Ré-allocation pour vérifier que la mémoire a été libérée correctement
+            let ptr3 = ALLOCATOR.alloc(layout1.clone());
+            assert!(!ptr3.is_null());
+        }
+    }
 }
